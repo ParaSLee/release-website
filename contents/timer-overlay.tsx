@@ -261,6 +261,8 @@ const TimerOverlay = () => {
           height: "72px",
           zIndex: 2147483646,
           cursor: isDragging ? "grabbing" : "grab",
+          userSelect: "none",
+          WebkitUserSelect: "none",
         }}
         onMouseDown={handleDragStart}
       >
@@ -386,6 +388,8 @@ const TimerOverlay = () => {
         width: "320px",
         zIndex: 2147483646,
         cursor: isDragging ? "grabbing" : "default",
+        userSelect: "none",
+        WebkitUserSelect: "none",
       }}
     >
       <div
