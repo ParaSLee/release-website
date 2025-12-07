@@ -36,6 +36,8 @@ const TimerOverlay = () => {
   const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
   const [hasDragged, setHasDragged] = useState(false); // 追踪是否发生了实际拖动
   const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0 }); // 拖动开始的位置
+  const [emergencyUsedToday, setEmergencyUsedToday] = useState(0); // 今日紧急使用次数
+  const [emergencyExtraTime, setEmergencyExtraTime] = useState(600); // 每次紧急使用的额外时间（默认10分钟）
 
   useEffect(() => {
     // 初始化：检查当前页面状态
@@ -72,10 +74,16 @@ const TimerOverlay = () => {
       const currentDomain = extractDomain(window.location.href);
       if (!currentDomain) return;
 
+      // 获取网站状态
       const response = await chrome.runtime.sendMessage({
         type: "GET_WEBSITE_STATUS",
         payload: { domain: currentDomain },
       });
+
+      // 获取全局设置（用于获取emergencyExtraTime）
+      const settingsResult = await chrome.storage.local.get("globalSettings");
+      const globalSettings = settingsResult.globalSettings || {};
+      const extraTimePerUse = globalSettings.emergencyExtraTime || 600;
 
       if (response.success) {
         const data = response.data;
@@ -86,6 +94,8 @@ const TimerOverlay = () => {
           setDisplayName(getDisplayName(currentDomain));
           setRemainingTime(data.remainingTime);
           setTotalTime(data.dailyLimit);
+          setEmergencyUsedToday(data.emergencyUsedToday || 0);
+          setEmergencyExtraTime(extraTimePerUse);
           setIsVisible(true);
         } else {
           setIsVisible(false);
@@ -99,15 +109,32 @@ const TimerOverlay = () => {
   /**
    * 更新计时器
    */
-  const updateTimer = (payload: {
+  const updateTimer = async (payload: {
     domain: string;
     remainingTime: number;
     totalTime: number;
+    emergencyUsedToday?: number;
   }) => {
     setDomain(payload.domain);
     setDisplayName(getDisplayName(payload.domain));
     setRemainingTime(payload.remainingTime);
     setTotalTime(payload.totalTime);
+    
+    // 更新紧急使用次数
+    if (payload.emergencyUsedToday !== undefined) {
+      setEmergencyUsedToday(payload.emergencyUsedToday);
+    }
+    
+    // 获取全局设置中的emergencyExtraTime
+    try {
+      const settingsResult = await chrome.storage.local.get("globalSettings");
+      const globalSettings = settingsResult.globalSettings || {};
+      const extraTimePerUse = globalSettings.emergencyExtraTime || 600;
+      setEmergencyExtraTime(extraTimePerUse);
+    } catch (error) {
+      console.error("[Timer] 获取全局设置失败:", error);
+    }
+    
     setIsVisible(true);
   };
 
@@ -225,14 +252,21 @@ const TimerOverlay = () => {
 
   if (!isVisible) return null;
 
-  // 计算百分比
-  const percentage = totalTime > 0 ? (remainingTime / totalTime) * 100 : 0;
+  // 计算实际拥有的总时间（固定值，不随倒计时变化）
+  // actualTotalTime = 原始限制 + 紧急使用次数 × 每次额外时间
+  const emergencyTotalTime = emergencyUsedToday * emergencyExtraTime;
+  const actualTotalTime = totalTime + emergencyTotalTime;
+  
+  // 计算百分比（基于实际总时间）
+  const percentage = actualTotalTime > 0 ? (remainingTime / actualTotalTime) * 100 : 0;
 
   // 格式化时间
   const formatTime = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
+    // 确保秒数为非负整数
+    const totalSeconds = Math.max(0, Math.floor(seconds));
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const secs = totalSeconds % 60;
 
     if (hours > 0) {
       return `${hours}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
@@ -542,8 +576,17 @@ const TimerOverlay = () => {
             letterSpacing: "0.01em",
           }}
         >
-          <span>已使用 {formatTime(totalTime - remainingTime)}</span>
-          <span>总计 {formatTime(totalTime)}</span>
+          <span>已使用 {formatTime(Math.max(0, actualTotalTime - remainingTime))}</span>
+          <span>
+            总计 {formatTime(totalTime)}
+            {emergencyUsedToday > 0 && (
+              <span style={{ color: "rgba(251, 191, 36, 0.9)" }}>
+                {" (+"}
+                {emergencyUsedToday}
+                {"次紧急使用)"}
+              </span>
+            )}
+          </span>
         </div>
       </div>
     </div>

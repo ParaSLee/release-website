@@ -1,6 +1,7 @@
 import type { UsageData, WebsiteStatus } from "~types";
 
 import { updateUsageData } from "../hooks/useUsageData";
+import { formatDate } from "./time";
 
 /**
  * 状态转换规则
@@ -38,14 +39,21 @@ export async function transitionToLocked(domain: string): Promise<void> {
  * 从 Pending 转换到 Active（紧急使用）
  */
 export async function transitionToActiveFromPending(domain: string, extraTime: number): Promise<void> {
+  const today = formatDate(new Date());
   const result = await chrome.storage.local.get("usageData");
   const usageData: UsageData[] = result.usageData || [];
   
-  const todayData = usageData.find((data) => data.domain === domain);
-  if (!todayData) return;
+  const todayData = usageData.find((data) => data.domain === domain && data.date === today);
+  if (!todayData) {
+    console.error(`[状态管理] 未找到 ${domain} 的今日数据，无法执行紧急使用`);
+    return;
+  }
 
   // 从已使用时间中减去额外时间（相当于增加时间）
-  const newUsedTime = Math.max(0, todayData.usedTime - extraTime);
+  // 注意：允许usedTime为负数，表示还有额外的可用时间
+  const newUsedTime = todayData.usedTime - extraTime;
+
+  console.log(`[状态管理] ${domain}: 紧急使用前 usedTime=${todayData.usedTime}, 紧急使用后 usedTime=${newUsedTime}, 额外时间=${extraTime}秒`);
 
   await updateUsageData(domain, {
     status: "active",
@@ -131,9 +139,10 @@ export function isValidTransition(from: WebsiteStatus, to: WebsiteStatus): boole
  * 获取网站的当前状态
  */
 export async function getCurrentState(domain: string): Promise<WebsiteStatus> {
+  const today = formatDate(new Date());
   const result = await chrome.storage.local.get("usageData");
   const usageData: UsageData[] = result.usageData || [];
   
-  const todayData = usageData.find((data) => data.domain === domain);
+  const todayData = usageData.find((data) => data.domain === domain && data.date === today);
   return todayData?.status || "active";
 }

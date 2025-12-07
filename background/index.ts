@@ -28,6 +28,7 @@ interface ActiveTimer {
   tabId: number;
   startTime: number;
   intervalId: NodeJS.Timeout;
+  initialUsedTime?: number; // 计时器启动时的已使用时间
 }
 
 // 当前活跃的计时器
@@ -260,6 +261,11 @@ function startTimer(domain: string, tabId: number, dailyLimit: number): void {
 
   const startTime = Date.now();
 
+  // 立即执行一次更新（避免1秒延迟）
+  updateTimer(domain, tabId, startTime, dailyLimit).catch((error) => {
+    console.error(`[Background] 首次更新计时器失败 (${domain}):`, error);
+  });
+
   // 每秒更新一次
   const intervalId = setInterval(async () => {
     try {
@@ -303,12 +309,28 @@ async function updateTimer(
     return;
   }
 
-  // 更新已使用时间
-  const newUsedTime = todayData.usedTime + 1;
-  await updateUsageData(domain, {
-    usedTime: newUsedTime,
-    activeTabId: tabId,
-  });
+  // 获取计时器启动时的初始usedTime
+  const timer = activeTimers.get(domain);
+  if (!timer) {
+    console.error(`[Background] 未找到 ${domain} 的计时器`);
+    return;
+  }
+
+  // 如果是第一次记录，保存初始usedTime
+  if (!timer.initialUsedTime && timer.initialUsedTime !== 0) {
+    timer.initialUsedTime = todayData.usedTime;
+  }
+
+  // 基于elapsed计算新的usedTime（避免累积误差）
+  const newUsedTime = timer.initialUsedTime + elapsed;
+
+  // 只有当时间真正变化时才更新
+  if (newUsedTime !== todayData.usedTime) {
+    await updateUsageData(domain, {
+      usedTime: newUsedTime,
+      activeTabId: tabId,
+    });
+  }
 
   // 检查是否达到限制
   const remainingTime = dailyLimit - newUsedTime;
@@ -511,7 +533,7 @@ async function handleMessage(message: any, sender: chrome.runtime.MessageSender)
       return await handleGetWebsiteStatus(message.payload);
 
     case "EMERGENCY_USE":
-      return await handleEmergencyUse(message.payload);
+      return await handleEmergencyUse(message.payload, sender);
 
     case "LOCK_IMMEDIATELY":
       return await handleLockImmediately(message.payload, sender);
@@ -536,25 +558,72 @@ async function handleGetWebsiteStatus(payload: { domain: string }): Promise<any>
   const websites = await getWebsites();
   const website = websites.find((site) => matchesDomain(`https://${domain}`, site.domain));
 
+  const remainingTime = website ? website.dailyLimit - usageData.usedTime : 0;
+
+  console.log(`[Background] 获取网站状态: ${domain}, usedTime=${usageData.usedTime}, dailyLimit=${website?.dailyLimit}, remainingTime=${remainingTime}`);
+
   return {
     status: usageData.status,
-    remainingTime: website ? website.dailyLimit - usageData.usedTime : 0,
+    remainingTime,
     usedTime: usageData.usedTime,
     dailyLimit: website?.dailyLimit || 0,
     restarted: usageData.restarted,
     timeLockDisabled: usageData.timeLockDisabled,
+    emergencyUsedToday: usageData.emergencyUsedToday || 0,
   };
 }
 
 /**
  * 处理紧急使用请求
  */
-async function handleEmergencyUse(payload: { domain: string }): Promise<any> {
+async function handleEmergencyUse(payload: { domain: string }, sender?: chrome.runtime.MessageSender): Promise<any> {
   const { domain } = payload;
+  const tabId = sender?.tab?.id;
+
+  if (!tabId) {
+    console.error("[Background] 无法获取tab ID，sender:", sender);
+    return { success: false, message: "无法获取tab ID" };
+  }
+
   const globalSettings = await getGlobalSettings();
   const extraTime = globalSettings.emergencyExtraTime;
 
+  console.log(`[Background] 处理紧急使用: ${domain}, 额外时间: ${extraTime}秒, tabId: ${tabId}`);
+
+  // 转换状态为active
   await transitionToActiveFromPending(domain, extraTime);
+
+  // 获取更新后的使用数据和网站配置
+  const usageData = await getOrCreateTodayUsage(domain);
+  const websites = await getWebsites();
+  const website = websites.find((site) => site.enabled && matchesDomain(`https://${domain}`, site.domain));
+
+  console.log(`[Background] 紧急使用后的状态: status=${usageData.status}, usedTime=${usageData.usedTime}`);
+
+  if (website) {
+    // 立即启动计时器
+    console.log(`[Background] 启动计时器: ${domain}, dailyLimit: ${website.dailyLimit}`);
+    startTimer(domain, tabId, website.dailyLimit);
+
+    // 通知Content Script更新计时器显示
+    try {
+      const remainingTime = website.dailyLimit - usageData.usedTime;
+      await chrome.tabs.sendMessage(tabId, {
+        type: "UPDATE_TIMER",
+        payload: {
+          domain,
+          remainingTime,
+          totalTime: website.dailyLimit,
+          emergencyUsedToday: usageData.emergencyUsedToday || 0,
+        },
+      });
+      console.log(`[Background] 已通知timer-overlay更新: remainingTime=${remainingTime}, emergencyUsedToday=${usageData.emergencyUsedToday}`);
+    } catch (error) {
+      console.error(`[Background] 通知timer-overlay失败:`, error);
+    }
+  } else {
+    console.error(`[Background] 未找到网站配置: ${domain}`);
+  }
 
   return {
     success: true,

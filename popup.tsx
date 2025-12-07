@@ -20,6 +20,8 @@ interface WebsiteStatus {
   usage: UsageData;
   remainingTime: number;
   percentage: number;
+  emergencyExtraTime: number; // 紧急使用增加的总时间
+  actualTotalTime: number; // 实际拥有的总时间（原始+紧急）
 }
 
 function IndexPopup() {
@@ -74,6 +76,9 @@ function IndexPopup() {
       // 获取今日日期
       const today = new Date().toISOString().split("T")[0];
 
+      // 获取紧急使用的额外时间
+      const emergencyExtraTimePerUse = globalSettings.emergencyExtraTime || 600; // 默认10分钟
+
       // 合并配置和使用数据
       const statuses: WebsiteStatus[] = websiteConfigs
         .filter((config) => config.enabled)
@@ -91,14 +96,29 @@ function IndexPopup() {
             timeLockDisabled: false,
           };
 
-          const remainingTime = Math.max(0, config.dailyLimit - usage.usedTime);
-          const percentage = config.dailyLimit > 0 ? (usage.usedTime / config.dailyLimit) * 100 : 0;
+          // 计算紧急使用增加的总时间
+          const emergencyExtraTime = (usage.emergencyUsedToday || 0) * emergencyExtraTimePerUse;
+          
+          // 计算实际拥有的总时间（原始限制 + 紧急使用）
+          const actualTotalTime = config.dailyLimit + emergencyExtraTime;
+          
+          // 计算剩余时间（基于 dailyLimit，与 Background 保持一致）
+          // 当 usedTime 为负数时，remainingTime 会包含紧急使用的额外时间
+          const remainingTime = config.dailyLimit - usage.usedTime;
+          
+          // 计算实际已使用时间（actualTotalTime - remainingTime）
+          const actualUsedTime = Math.max(0, actualTotalTime - remainingTime);
+          
+          // 基于实际总时间计算百分比
+          const percentage = actualTotalTime > 0 ? (actualUsedTime / actualTotalTime) * 100 : 0;
 
           return {
             config,
             usage,
-            remainingTime,
-            percentage: Math.min(100, percentage),
+            remainingTime: Math.max(0, remainingTime), // 剩余时间不能为负
+            percentage: Math.min(100, Math.max(0, percentage)), // 百分比在0-100之间
+            emergencyExtraTime,
+            actualTotalTime,
           };
         })
         .sort((a, b) => a.percentage - b.percentage); // 按使用率排序
@@ -226,20 +246,33 @@ function IndexPopup() {
                     </div>
                   </div>
 
-                  {/* 重启标记 */}
-                  {site.usage.restarted && (
-                    <div className="flex items-center gap-1 px-2 py-1 bg-orange-100 border border-orange-200 rounded-md flex-shrink-0">
-                      <RefreshCw className="w-3 h-3 text-orange-600" />
-                      <span className="text-xs text-orange-700 font-medium">已重启</span>
-                    </div>
-                  )}
+                  {/* 标记区域 */}
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {/* 紧急使用标记 */}
+                    {site.usage.emergencyUsedToday > 0 && (
+                      <div className="flex items-center gap-1 px-2 py-1 bg-amber-100 border border-amber-200 rounded-md">
+                        <Zap className="w-3 h-3 text-amber-600" />
+                        <span className="text-xs text-amber-700 font-medium">
+                          紧急使用 ×{site.usage.emergencyUsedToday}
+                        </span>
+                      </div>
+                    )}
+                    
+                    {/* 重启标记 */}
+                    {site.usage.restarted && (
+                      <div className="flex items-center gap-1 px-2 py-1 bg-orange-100 border border-orange-200 rounded-md">
+                        <RefreshCw className="w-3 h-3 text-orange-600" />
+                        <span className="text-xs text-orange-700 font-medium">已重启</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* 时间信息 */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-gray-600">
-                      已使用: {formatDuration(site.usage.usedTime)}
+                      已使用: {formatDuration(Math.max(0, site.actualTotalTime - site.remainingTime))}
                     </span>
                     <span
                       className={`font-semibold ${
@@ -268,9 +301,23 @@ function IndexPopup() {
                     />
                   </div>
 
-                  {/* 百分比 */}
+                  {/* 百分比和总限制 */}
                   <div className="flex items-center justify-between text-xs text-gray-500">
-                    <span>总限制: {formatDuration(site.config.dailyLimit)}</span>
+                    {/* 总限制显示 */}
+                    {site.emergencyExtraTime > 0 ? (
+                      <span>
+                        总限制: {formatDuration(site.config.dailyLimit)}
+                        {" + "}
+                        <span className="text-amber-600 font-medium">
+                          {formatDuration(site.emergencyExtraTime)}
+                        </span>
+                        <span className="text-amber-600"> (紧急使用)</span>
+                      </span>
+                    ) : (
+                      <span>总限制: {formatDuration(site.config.dailyLimit)}</span>
+                    )}
+                    
+                    {/* 百分比 */}
                     <span>{Math.round(site.percentage)}% 已使用</span>
                   </div>
                 </div>

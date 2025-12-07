@@ -22,7 +22,7 @@ function OptionsIndex() {
       <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
 
       {/* 内容区 */}
-      <div className="flex-1 overflow-hidden">
+      <div className="flex-1 overflow-y-auto">
         {activeTab === "websites" && <WebsitesTab />}
         {activeTab === "timelock" && <TimeLockTab />}
         {activeTab === "reset" && <ResetTab />}

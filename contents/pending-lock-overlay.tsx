@@ -177,9 +177,10 @@ const PendingLockOverlay = () => {
 
       if (response.success) {
         console.log(`[PendingLock] 紧急使用成功，增加${response.data.extraTime}秒`);
+        // 隐藏待锁定遮罩
         hidePendingLock();
-        // 刷新页面以恢复正常状态
-        window.location.reload();
+        // Background会自动启动计时器，timer-overlay会自动显示
+        console.log(`[PendingLock] 待锁定遮罩已隐藏，等待倒计时悬浮窗显示`);
       }
     } catch (error) {
       console.error("[PendingLock] 紧急使用失败:", error);
